@@ -64,11 +64,43 @@ func (s *SafeMap1[K, V]) UpdateMapDoubleCheck(k K, v1 V) (v V, b bool) {
 
 ### Pool
 
-如果需要考虑缓存资源，比如创建好的对象，那么可以使用sync.Pool，目的是减少内存分配和减轻GC压力
+如果需要考虑缓存资源，比如创建好的对象，那么可以使用sync.Pool，目的是减少内存分配和减轻GC压力(CPU)
 
 Sync.Pool会先检查自己是否有资源， 有就返回，没有就创建新的
 
 Sync.Pool会在GC时释放缓存的资源
+
+补充：内存分配到栈上不需要GC管理， 分配到堆上才需要
+
+设计细节
+
+* 采用PMG调度模型，P代表处理器；任何绑定到P上的数据都不需要竞争， 因为P在同一时刻只有一个G在运行
+* 每个P有一个poolLocal对象， 包含private和shared
+* shared 是一个链表+ring buffer的结构
+  * 总体是一个双向链表
+  * 每个链表的节点指向一个ring buffer，后一个节点的ring buffer是前一个节点的两倍
+* ring buffer的优势（数组的优势）
+  * 一次性分配内存，循环利用
+  * 对缓存友好
+
+GET步骤
+
+* 首先查找private是否可用，可用就直接返回
+* 不可用就从自己的poolChain里尝试获取一个
+  * 从最近创建的ring buffer开始找
+* 如果找不到尝试从其他P里偷
+* 偷不到时去找victim
+* victim中也没有则重新创建
+
+Pool与GC
+
+正常情况下为了控制Pool的内存消耗，需要考虑淘汰问题。但sync.Pool完全依赖于GC, 用户无法手动控制
+
+GC的过程
+
+* Locals 会变成victim
+* victim灰被直接回收掉，如果对象再次被使用则变回locals。
+  * 防止GC引起性能抖动
 
 ```go
 package demo
