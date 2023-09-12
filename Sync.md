@@ -70,7 +70,15 @@ Sync.Pool会先检查自己是否有资源， 有就返回，没有就创建新�
 
 Sync.Pool会在GC时释放缓存的资源
 
-补充：内存分配到栈上不需要GC管理， 分配到堆上才需要
+内存使用量不可控
+
+补充：
+
+* 内存分配到栈上不需要GC管理， 分配到堆上才需要
+* buffer 可以看作是字节数组， 用来缓存，如拼接字符串，IO操作等
+  * 三方包 bytebufferpool
+    * 基于sync.Pool的封装
+    * 引入校准机制，根据使用次数动态计算defaultSize和maxSize
 
 设计细节
 
@@ -88,7 +96,7 @@ GET步骤
 * 首先查找private是否可用，可用就直接返回
 * 不可用就从自己的poolChain里尝试获取一个
   * 从最近创建的ring buffer开始找
-* 如果找不到尝试从其他P里偷
+* 如果找不到尝试从其他P里偷， 窃取算法。竞争小于全局共享队列
 * 偷不到时去找victim
 * victim中也没有则重新创建
 
@@ -147,9 +155,100 @@ func (u *User) ChangeName(newName string) {
 
 
 
-WaitGroup
+### WaitGroup
 
-补充：
+注意在goroutine外进行Add;Done减为负数会panic
+
+实现
+
+* noCopy主要用于告诉编译器这个货不能用来复制，比如值传递；应该使用指针 
+* state1
+  * 高32位 记录任务数量
+  * 低32位 记录等待的goroutine数量
+* state2 信号量 用于挂起或唤醒goroutine
+
+
+
+### channel
+
+几个要点
+
+* 是否带缓冲
+  * 非缓冲 要求发送和接收者同时存在
+  * 有缓冲
+    * 满了阻塞发送者
+    * 空了阻塞接收者
+* 谁在发
+* 谁在收
+* 谁来关
+* 是否关闭了
+
+用途
+
+* 看作是队列，用于传递数据
+* 利用阻塞特性控制goroutine
+
+实现任务池
+
+* 使用一个channel控制并发， 任务在从channel中获取值后执行， 这是一个并发队列
+* 预先创建好指定个goroutine, 每个goroutine不断从任务队列中获取
+
+goroutine泄露
+
+* channel一直阻塞，导致goroutine资源不释放
+
+* 读写nil的channel不会panic会一直阻塞
+
+* 即使channel close掉了也，也会继续读出零值
+
+  ```go
+  func TestChannelClosed(t *testing.T) {
+  	ch := make(chan string, 10)
+  	go func() {
+  		data := <-ch
+  		fmt.Printf("g1 receiver %s", data)
+  	}()
+  
+  	go func() {
+  		close(ch)
+  		fmt.Printf("closed")
+  
+  	}()
+  	for {
+  		<-ch
+  		fmt.Println("111")
+  	}
+  }
+  ```
+
+  关闭了继续写会panic
+
+  panic: send on closed channel [recovered]
+
+内存逃逸
+
+* 如果用channel发送指针那么必然逃逸；编译器无法确定指针数据最终是被哪个goroutine接收
+
+实现细节
+
+* buf 存储数据，unsafe.Pointer 指向ring buffer
+* recvq 接收者队列
+* sendq 发送者队列
+
+开源实例 kratos
+
+* 启动过程需要的考虑
+  * 监听关闭信号
+  * 监控server启动过程，一个失败全部退出
+  * 监控server异常退出
+
+面试
+
+* 用channel实现一个任务池
+* 用channel控制goroutine数量
+* 用channel实现生产-消费模型
+
+### 补充：
 
 泛型
 
