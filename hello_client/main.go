@@ -33,6 +33,9 @@ func main() {
 	//fmt.Print(resp.Message)
 
 	//调用服务端流式方法
-	runLotsOfReplies(client)
+	//runLotsOfReplies(client)
 
+	//runLotsOfGreeting(client)
+
+	runBidiHello(client)
 }
